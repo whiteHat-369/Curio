@@ -1,0 +1,201 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Track A Models ────────────────────────────────────────────────
+// Auth, Workspaces, Evidence Map, Overview, Notes
+
+model User {
+  id                String    @id @default(uuid())
+  email             String    @unique
+  passwordHash      String
+  name              String?
+  mobile            String?
+  field             String?
+  affiliation       String?
+  emailVerifiedAt   DateTime? @db.Timestamptz
+  onboardedAt       DateTime? @db.Timestamptz
+  createdAt         DateTime  @default(now()) @db.Timestamptz
+  updatedAt         DateTime  @updatedAt @db.Timestamptz
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String   // -> User.id
+  tokenHash String   @unique
+  expiresAt DateTime @db.Timestamptz
+  createdAt DateTime @default(now()) @db.Timestamptz
+
+  @@index([userId])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String    // -> User.id
+  tokenHash String    @unique
+  expiresAt DateTime  @db.Timestamptz
+  usedAt    DateTime? @db.Timestamptz
+
+  @@index([userId])
+}
+
+model EmailVerificationToken {
+  id        String   @id @default(uuid())
+  userId    String   // -> User.id
+  tokenHash String   @unique
+  expiresAt DateTime @db.Timestamptz
+
+  @@index([userId])
+}
+
+model Workspace {
+  id        String   @id @default(uuid())
+  ownerId   String   // -> User.id
+  name      String
+  question  String   @default("")
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  @@index([ownerId])
+}
+
+model EvidenceClaim {
+  id          String   @id @default(uuid())
+  workspaceId String   // -> Workspace.id
+  paperId     String   // -> Paper.id
+  question    String
+  stance      String   // "supports" | "contradicts" | "mixed"
+  summary     String
+  paragraph   String
+  confidence  Float    @default(0)
+  createdAt   DateTime @default(now()) @db.Timestamptz
+
+  @@index([workspaceId])
+  @@index([paperId])
+}
+
+model Note {
+  id          String    @id @default(uuid())
+  workspaceId String    // -> Workspace.id
+  title       String
+  body        String
+  group       String?
+  tags        String[]
+  paperIds    String[]  // -> Paper.id[]
+  deletedAt   DateTime? @db.Timestamptz
+  createdAt   DateTime  @default(now()) @db.Timestamptz
+  updatedAt   DateTime  @updatedAt @db.Timestamptz
+
+  @@index([workspaceId, deletedAt])
+}
+
+// ── Track B Models ────────────────────────────────────────────────
+// Papers, Datasets, Conversations, Chat Messages, Annotations, ApiKeys
+
+model Paper {
+  id           String   @id @default(uuid())
+  workspaceId  String   // -> Workspace.id
+  title        String
+  authors      String[]
+  year         Int
+  venue        String
+  status       String   @default("unread") // "unread" | "reading" | "read"
+  tags         String[]
+  group        String?
+  abstract     String   @default("")
+  methodology  String   @default("")
+  dataset      String   @default("")
+  results      String   @default("")
+  limitations  String   @default("")
+  keywords     String[]
+  fileKey      String?  // object storage key for uploaded PDF
+  pinned       Boolean  @default(false)
+  deletedAt    DateTime?
+  createdAt    DateTime @default(now()) @db.Timestamptz
+  updatedAt    DateTime @updatedAt @db.Timestamptz
+
+  summary     PaperSummary?
+  annotations Annotation[]
+
+  @@index([workspaceId, deletedAt])
+  @@index([status])
+}
+
+model Dataset {
+  id           String   @id @default(uuid())
+  workspaceId  String   // -> Workspace.id
+  name         String
+  fileKey      String   // object storage key
+  fileType     String   // csv | json | parquet | xlsx
+  previewJson  Json?    // cached sample rows/columns
+  createdAt    DateTime @default(now()) @db.Timestamptz
+
+  @@index([workspaceId])
+}
+
+model Conversation {
+  id           String   @id @default(uuid())
+  workspaceId  String
+  title        String
+  group        String?
+  createdAt    DateTime @default(now()) @db.Timestamptz
+  updatedAt    DateTime @updatedAt @db.Timestamptz
+
+  messages ChatMessage[]
+
+  @@index([workspaceId])
+}
+
+model ChatMessage {
+  id             String   @id @default(uuid())
+  conversationId String
+  role           String   // "user" | "assistant"
+  content        String
+  external       Boolean  @default(false)
+  sources        Json?    // [{ paperId, paragraph, confidence }]
+  followups      String[]
+  attachmentKeys String[] // object storage keys
+  createdAt      DateTime @default(now()) @db.Timestamptz
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+}
+
+model PaperSummary {
+  paperId      String   @id // -> Paper.id
+  intro        String   @default("")
+  methodology  String   @default("")
+  result       String   @default("")
+  limitations  String   @default("")
+  generatedAt  DateTime @default(now()) @db.Timestamptz
+
+  paper Paper @relation(fields: [paperId], references: [id], onDelete: Cascade)
+}
+
+model Annotation {
+  id        String   @id @default(uuid())
+  paperId   String
+  text      String
+  createdAt DateTime @default(now()) @db.Timestamptz
+
+  paper Paper @relation(fields: [paperId], references: [id], onDelete: Cascade)
+
+  @@index([paperId])
+}
+
+model ApiKey {
+  id         String   @id @default(uuid())
+  userId     String   // -> User.id
+  scope      String   // "model:openai" | "model:gemini" | "model:grok"
+  ciphertext String   // encrypted at rest (AES-256-GCM)
+  createdAt  DateTime @default(now()) @db.Timestamptz
+
+  @@unique([userId, scope])
+  @@index([userId])
+}

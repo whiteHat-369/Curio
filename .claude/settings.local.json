@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e \"console.log\\(Object.keys\\(require\\('./node_modules/@tanstack/react-start/package.json'\\).exports||{}\\)\\)\")",
+      "Bash(npm install *)",
+      "Bash(npx tsc *)",
+      "Bash(timeout 90 npx vite build)",
+      "Bash(npx vite *)"
+    ]
+  }
+}
