@@ -26,6 +26,8 @@ import {
   Sparkles,
 } from "lucide-react";
 import { EmptyState } from "@/components/empty-state";
+import { Markdown } from "@/components/markdown";
+import { RelatedRail, buildRelatedResources } from "@/components/related-resources";
 import { slugify } from "@/lib/utils";
 import {
   DropdownMenu,
@@ -57,10 +59,14 @@ function ChatPage() {
   const { name } = useParams({ from: "/_app/workspace/$name/chat" });
   const ws = useApiStore((s) => s.workspaces.find((w) => slugify(w.name) === name));
   const wsId = ws?.id ?? "";
+  const papers = useApiStore((s) => s.papers);
+  const wsPapers = papers.filter((p) => p.workspaceId === wsId);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const defaultModel = useApiStore((s) => s.defaultModel);
   const defaultIncludeExternal = useApiStore((s) => s.defaultIncludeExternal);
+  const setDefaultModel = useApiStore((s) => s.setDefaultModel);
+  const setDefaultIncludeExternal = useApiStore((s) => s.setDefaultIncludeExternal);
   const [external, setExternal] = useState(defaultIncludeExternal);
   const [model, setModel] = useState(defaultModel || "gemini");
   const [historyOpen, setHistoryOpen] = useState(true);
@@ -191,6 +197,7 @@ function ChatPage() {
       content:
         currentDraft +
         (attachments.length > 0 ? ` [Attached: ${attachments.map((f) => f.name).join(", ")}]` : ""),
+      external,
     };
     setMessages((m) => [...m, userMsg]);
     setIsSending(true);
@@ -203,6 +210,7 @@ function ChatPage() {
       });
 
       if (res?.assistantMessage) {
+        const modelName = model === "gemini" ? "Gemini" : model === "openai" ? "GPT-4o" : "Grok-2";
         const assistantMsg: ChatMessage = {
           id: res.assistantMessage.id,
           role: "assistant",
@@ -211,6 +219,8 @@ function ChatPage() {
           sources: res.assistantMessage.sources ?? undefined,
           followups: res.assistantMessage.followups ?? undefined,
         };
+        (assistantMsg as { model?: string }).model =
+          `${modelName}${res.assistantMessage.external ? " · External" : " · Workspace"}`;
         setMessages((m) => [...m, assistantMsg]);
       }
     } catch (err: any) {
@@ -389,10 +399,24 @@ function ChatPage() {
                 </button>
               )}
               <Sparkles className="h-4 w-4 text-[var(--primary)]" />
-              <h1 className="font-display text-xl font-semibold">AI Research Assistant</h1>
+              <div>
+                <h1 className="font-display text-xl font-semibold leading-none">AI Research Assistant</h1>
+                <p className="mt-1 font-ui text-[11px] text-muted-foreground">
+                  Grounded in {wsPapers.length} workspace paper{wsPapers.length === 1 ? "" : "s"}
+                  {" · "}
+                  {model === "gemini" ? "Google Gemini" : model === "openai" ? "OpenAI GPT-4o" : "xAI Grok-2"}
+                  {external ? " · External literature on" : " · Workspace only"}
+                </p>
+              </div>
             </div>
             <div className="flex items-center gap-2">
-              <Select value={model} onValueChange={setModel}>
+              <Select
+                value={model}
+                onValueChange={(v) => {
+                  setModel(v);
+                  setDefaultModel(v);
+                }}
+              >
                 <SelectTrigger className="h-7 w-auto rounded-full border-border bg-card px-2.5 font-ui text-xs text-muted-foreground">
                   <SelectValue />
                 </SelectTrigger>
@@ -402,9 +426,26 @@ function ChatPage() {
                   <SelectItem value="grok">xAI (Grok-2)</SelectItem>
                 </SelectContent>
               </Select>
-              <div className="flex items-center gap-2 rounded-full bg-card px-3 py-1 font-ui text-xs text-muted-foreground border border-border">
-                <Globe className="h-3 w-3" /> Include external literature
-                <Switch checked={external} onCheckedChange={setExternal} />
+              <div
+                className={`flex items-center gap-2 rounded-full px-3 py-1 font-ui text-xs border transition-colors ${
+                  external
+                    ? "border-[var(--accent-purple)]/50 bg-[var(--accent-purple)]/10 text-foreground"
+                    : "border-border bg-card text-muted-foreground"
+                }`}
+                title={external ? "External literature included" : "Workspace papers only"}
+              >
+                <Globe className={`h-3 w-3 ${external ? "text-[var(--accent-purple)]" : ""}`} />
+                Include external literature
+                <Switch
+                  checked={external}
+                  onCheckedChange={(v) => {
+                    setExternal(v);
+                    setDefaultIncludeExternal(v);
+                    toast.success(
+                      v ? "External literature included" : "Using workspace papers only",
+                    );
+                  }}
+                />
               </div>
             </div>
           </div>
@@ -436,13 +477,19 @@ function ChatPage() {
               </div>
             </div>
           ) : (
-            <div className="mx-auto max-w-3xl space-y-6">
+            <div className="mx-auto max-w-5xl space-y-6">
               {messages.map((m, i) => (
                 <MessageBubble
                   key={m.id}
                   m={m}
                   isLast={i === messages.length - 1}
                   onFollowup={(q) => setDraft(q)}
+                  query={
+                    [...messages.slice(0, i)]
+                      .reverse()
+                      .find((x) => x.role === "user")?.content ?? ""
+                  }
+                  wsName={ws.name}
                 />
               ))}
 
@@ -520,17 +567,28 @@ function MessageBubble({
   m,
   isLast,
   onFollowup,
+  query,
+  wsName,
 }: {
   m: ChatMessage;
   isLast: boolean;
   onFollowup: (q: string) => void;
+  query: string;
+  wsName: string;
 }) {
   const papers = useApiStore((s) => s.papers);
+  // Only the newest message animates in — history loads instantly.
+  const enterClass = isLast ? "animate-enter" : undefined;
 
   if (m.role === "user") {
     return (
-      <div className="flex justify-end">
-        <div className="max-w-lg rounded-2xl rounded-br-md bg-[var(--primary)]/15 px-4 py-2.5 text-sm text-foreground border border-[var(--primary)]/20 shadow-sm whitespace-pre-wrap">
+      <div className={`flex flex-col items-end gap-1.5 ${enterClass ?? ""}`}>
+        {m.external && (
+          <span className="flex items-center gap-1 font-ui text-[10px] font-semibold uppercase tracking-wider text-[var(--accent-purple)]">
+            <Globe className="h-2.5 w-2.5" /> External literature included
+          </span>
+        )}
+        <div className="max-w-lg rounded-2xl rounded-br-md border border-[var(--primary)]/20 bg-[var(--primary)]/15 px-4 py-2.5 font-sans text-sm leading-relaxed text-foreground shadow-sm whitespace-pre-wrap">
           {m.content}
         </div>
       </div>
@@ -538,46 +596,83 @@ function MessageBubble({
   }
 
   const external = m.external;
+  const modelLabel =
+    (m as { model?: string }).model ??
+    (external ? "Gemini · External" : "Gemini · Workspace");
+  const resources = buildRelatedResources({
+    query,
+    papers,
+    citedIds: (m.sources ?? []).map((s) => s.paperId),
+    external: !!external,
+    wsName,
+  });
+  const showRail = resources.length > 0;
   return (
-    <div className="flex justify-start">
-      <div className="w-full max-w-2xl">
+    <div className={`flex justify-start ${enterClass ?? ""}`}>
+      <div className={`grid w-full gap-4 ${showRail ? "lg:grid-cols-[minmax(0,1fr)_250px]" : ""} ${showRail ? "max-w-5xl" : "max-w-2xl"}`}>
+        <div className="min-w-0">
         <Card
-          className={`border p-4 shadow-sm ${
+          className={`border p-0 shadow-sm ${
             external
-              ? "border-[var(--accent-purple)]/40 bg-[var(--accent-purple)]/5"
+              ? "border-[var(--accent-purple)]/40 bg-[var(--accent-purple)]/[0.04]"
               : "border-border"
           }`}
         >
-          {external && (
-            <Badge
-              variant="outline"
-              className="mb-2 border-[var(--accent-purple)]/40 font-ui text-[10px] text-[var(--accent-purple)]"
-            >
-              External literature
-            </Badge>
-          )}
-          <div className="text-[15px] leading-relaxed text-foreground whitespace-pre-wrap">
-            {m.content}
+          {/* Response header — model + provenance */}
+          <div className="flex items-center gap-2 border-b border-border/70 px-4 py-2.5">
+            <Sparkles className="h-3.5 w-3.5 text-[var(--primary)]" />
+            <span className="font-ui text-xs font-semibold text-foreground">Curio AI</span>
+            <span className="font-ui text-[11px] text-muted-foreground">· {modelLabel}</span>
+            {external ? (
+              <Badge
+                variant="outline"
+                className="ml-auto flex items-center gap-1 border-[var(--accent-purple)]/40 font-ui text-[10px] text-[var(--accent-purple)]"
+              >
+                <Globe className="h-2.5 w-2.5" /> External literature
+              </Badge>
+            ) : (
+              <Badge variant="outline" className="ml-auto font-ui text-[10px] text-muted-foreground">
+                Workspace sources
+              </Badge>
+            )}
           </div>
+
+          {/* Structured answer body */}
+          <div className="px-4 py-3">
+            <Markdown text={m.content} />
+          </div>
+
+          {/* Cited sources with provenance */}
           {m.sources && m.sources.length > 0 && (
-            <div className="mt-4 space-y-2">
-              <div className="font-ui text-[10px] uppercase tracking-wider text-muted-foreground">
-                Cited Sources
+            <div className="space-y-2 border-t border-border/70 px-4 py-3">
+              <div className="font-ui text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Cited sources · {m.sources.length}
               </div>
               {m.sources.map((s, i) => {
                 const paper = papers.find((p) => p.id === s.paperId);
                 return (
                   <div
                     key={i}
-                    className="flex items-center justify-between gap-3 rounded-md border border-border bg-background px-3 py-2"
+                    className="rounded-lg border border-border bg-background px-3 py-2.5"
                   >
-                    <div className="min-w-0">
-                      <div className="truncate text-xs font-medium text-foreground">
-                        {paper?.title || "Referenced Paper"}
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate font-ui text-xs font-semibold text-foreground">
+                          {i + 1}. {paper?.title || "Referenced paper"}
+                        </div>
+                        <div className="mt-0.5 font-ui text-[11px] text-muted-foreground">
+                          {paper
+                            ? `${paper.authors.slice(0, 3).join(", ")} · ${paper.venue} · ${paper.year}`
+                            : "External publication"}
+                        </div>
                       </div>
-                      <div className="font-ui text-[11px] text-muted-foreground">{s.paragraph}</div>
+                      <ConfidenceBar value={s.confidence} />
                     </div>
-                    <ConfidenceBar value={s.confidence} />
+                    {s.paragraph && (
+                      <div className="mt-2 border-l-2 border-[var(--primary)]/40 pl-2.5 font-sans text-xs leading-relaxed text-muted-foreground">
+                        “{s.paragraph}”
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -585,18 +680,25 @@ function MessageBubble({
           )}
         </Card>
         {isLast && m.followups && m.followups.length > 0 && (
-          <div className="mt-3 flex flex-wrap gap-2">
-            {m.followups.map((f) => (
-              <button
-                key={f}
-                onClick={() => onFollowup(f)}
-                className="rounded-full border border-border bg-card px-3 py-1 font-ui text-xs text-muted-foreground transition-all hover:border-[var(--primary)]/40 hover:text-foreground cursor-pointer shadow-sm"
-              >
-                {f}
-              </button>
-            ))}
+          <div className="mt-3">
+            <div className="mb-1.5 font-ui text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Follow up
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {m.followups.map((f) => (
+                <button
+                  key={f}
+                  onClick={() => onFollowup(f)}
+                  className="rounded-full border border-border bg-card px-3 py-1 font-ui text-xs text-muted-foreground transition-all hover:border-[var(--primary)]/40 hover:text-foreground cursor-pointer shadow-sm"
+                >
+                  {f}
+                </button>
+              ))}
+            </div>
           </div>
         )}
+        </div>
+        {showRail && <RelatedRail resources={resources} />}
       </div>
     </div>
   );

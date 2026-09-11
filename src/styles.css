@@ -223,3 +223,95 @@
     transparent 70%
   );
 }
+
+/* Subtle scrollbars — thin, theme-aware, no white track */
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklab, var(--foreground) 22%, transparent) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: color-mix(in oklab, var(--foreground) 22%, transparent);
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in oklab, var(--foreground) 38%, transparent);
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+}
+
+/* Subtle motion system — quiet fade/rise, never bouncy */
+@keyframes curio-rise {
+  from {
+    opacity: 0;
+    transform: translateY(7px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes curio-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@utility animate-enter {
+  animation: curio-rise 260ms cubic-bezier(0.22, 0.8, 0.36, 1) both;
+}
+
+@utility animate-enter-soft {
+  animation: curio-fade 220ms ease-out both;
+}
+
+@utility card-lift {
+  transition:
+    transform 200ms ease,
+    border-color 200ms ease,
+    box-shadow 200ms ease;
+}
+
+.card-lift:hover {
+  transform: translateY(-2px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-enter,
+  .animate-enter-soft {
+    animation: none;
+  }
+  .card-lift {
+    transition: none;
+  }
+}
+
+.reduce-motion .animate-enter,
+.reduce-motion .animate-enter-soft {
+  animation: none;
+}
+
+.reduce-motion .card-lift {
+  transition: none;
+}
+
+.reduce-motion * {
+  scroll-behavior: auto !important;
+}

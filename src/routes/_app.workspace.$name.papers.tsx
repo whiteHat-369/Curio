@@ -124,8 +124,12 @@ function PaperLibrary() {
     for (let i = 0; i < files.length; i++) {
       const f = files[i];
       if (f && f.type === "application/pdf") {
-        startUpload(ws.id, f.name);
-        toast.success(`Upload started: ${f.name}`);
+        const name = f.name;
+        toast.loading(`Uploading ${name}…`, { id: `upload-${name}-${i}` });
+        startUpload(ws.id, name, f).then((ok) => {
+          if (ok) toast.success(`Uploaded: ${name}`, { id: `upload-${name}-${i}` });
+          else toast.error(`Upload failed: ${name} — backend unreachable`, { id: `upload-${name}-${i}` });
+        });
       }
     }
   };
@@ -172,7 +176,7 @@ function PaperLibrary() {
   };
 
   return (
-    <div className="mx-auto max-w-6xl px-8 py-8">
+    <div className="mx-auto max-w-6xl px-8 py-8 animate-enter">
       <div className="mt-4 flex items-end justify-between">
         <div>
           <div className="flex items-center gap-2">
@@ -377,7 +381,7 @@ function PaperCard({
 }) {
   return (
     <Card
-      className={`group relative h-full border p-5 transition-colors ${
+      className={`group card-lift relative h-full border p-5 ${
         selected ? "border-[var(--primary)]/60" : "border-border hover:border-[var(--primary)]/40"
       }`}
     >

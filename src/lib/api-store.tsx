@@ -139,7 +139,7 @@ interface ApiStore {
   restoreTrashedPapers: (paperIds: string[]) => void;
   renamePaper: (paperId: string, newTitle: string) => void;
   groupPaper: (paperId: string, groupName: string) => void;
-  startUpload: (wsId: string, filename: string) => void;
+  startUpload: (wsId: string, filename: string | File, realFile?: File) => Promise<boolean>;
   uploading: Record<string, UploadingPaper[]>;
 
   // AI summaries
@@ -148,20 +148,26 @@ interface ApiStore {
 
   // Annotations
   annotations: Record<string, Annotation[]>;
+  fetchAnnotations: (wsId: string, paperId: string) => Promise<void>;
   addAnnotation: (paperId: string, text: string) => void;
   removeAnnotation: (paperId: string, id: string) => void;
 
   // Datasets
   databases: ImportDatabase[];
+  fetchDatasets: (wsId: string) => Promise<void>;
+  uploadDataset: (wsId: string, file: File) => Promise<void>;
   addDatabase: (name: string, fileName?: string) => void;
   renameDatabase: (dbId: string, newName: string) => void;
   deleteDatabase: (dbId: string) => void;
 
   // Evidence
   evidence: Record<string, EvidenceClaim[]>;
+  fetchEvidence: (wsId: string) => Promise<void>;
+  setEvidence: (wsId: string, claims: EvidenceClaim[]) => void;
 
   // Notes
   notes: Record<string, Note[]>;
+  fetchNotes: (wsId: string) => Promise<void>;
   createNote: (wsId: string) => string;
   updateNote: (wsId: string, note: Note) => void;
   deleteNote: (wsId: string, noteId: string) => void;
@@ -393,10 +399,13 @@ export const createApiStore = () => {
             addedAt: Date.now() - (100 - i) * 1000 * 60 * 60,
           }));
           set((s) => {
+            // Merge: keep papers from other workspaces, replace this one's.
+            const other = s.papers.filter((p) => p.workspaceId !== wsId);
+            const merged = [...papersWithMeta, ...other];
             const workspaces = s.workspaces.map((w) =>
               w.id === wsId ? { ...w, paperIds: papersWithMeta.map((p) => p.id) } : w,
             );
-            return { papers: papersWithMeta, workspaces, loadingPapers: false };
+            return { papers: merged, workspaces, loadingPapers: false };
           });
           get().recomputeProgress(wsId);
           return;
@@ -538,7 +547,58 @@ export const createApiStore = () => {
 
     uploading: {},
 
-    startUpload: (wsId, filename) => {
+    startUpload: (wsId, fileOrName, realFile?) => {
+      // Supports startUpload(wsId, filename) legacy + startUpload(wsId, filename, File)
+      const filename = typeof fileOrName === "string" ? fileOrName : (fileOrName as File).name;
+      const file: File | undefined =
+        realFile ?? (typeof fileOrName === "object" ? (fileOrName as File) : undefined);
+      if (file) {
+        // Real backend upload — persists the paper + extracts PDF content.
+        const id = "u_" + Math.random().toString(36).slice(2, 8);
+        const title = filename.replace(/\.pdf$/i, "").replace(/[_-]+/g, " ");
+        set((s) => ({
+          uploading: {
+            ...s.uploading,
+            [wsId]: [...(s.uploading[wsId] ?? []), { id, title, progress: 10 }],
+          },
+        }));
+        return papersApi
+          .upload(wsId, file)
+          .then((created) => {
+            set((s) => ({
+              uploading: {
+                ...s.uploading,
+                [wsId]: (s.uploading[wsId] ?? []).filter((x) => x.id !== id),
+              },
+            }));
+            if (created) {
+              const paper: PaperWithMeta = { ...created, addedAt: Date.now() };
+              set((s) => ({
+                papers: [paper, ...s.papers],
+                workspaces: s.workspaces.map((w) =>
+                  w.id === wsId && !w.paperIds.includes(paper.id)
+                    ? { ...w, paperIds: [paper.id, ...w.paperIds] }
+                    : w,
+                ),
+              }));
+              get().recomputeProgress(wsId);
+            } else {
+              get().fetchPapers(wsId);
+            }
+            return true;
+          })
+          .catch(() => {
+            set((s) => ({
+              uploading: {
+                ...s.uploading,
+                [wsId]: (s.uploading[wsId] ?? []).filter((x) => x.id !== id),
+              },
+            }));
+            // Refresh from server in case the paper was saved despite the error.
+            get().fetchPapers(wsId);
+            return false;
+          });
+      }
       const id = "u_" + Math.random().toString(36).slice(2, 8);
       const title = filename.replace(/\.pdf$/i, "").replace(/[_-]+/g, " ");
       set((s) => ({
@@ -604,6 +664,7 @@ export const createApiStore = () => {
           }, 300);
         }
       }, 220);
+      return Promise.resolve(true);
     },
 
     // ── Summaries ─────────────────────────────────────────────────
@@ -651,9 +712,23 @@ export const createApiStore = () => {
 
     // ── Annotations ───────────────────────────────────────────────
     annotations: {},
+    fetchAnnotations: async (wsId, paperId) => {
+      try {
+        const items = await papersApi.listAnnotations(wsId, paperId);
+        if (Array.isArray(items)) {
+          set((s) => ({
+            annotations: {
+              ...s.annotations,
+              [paperId]: items.map((a) => ({ id: a.id, text: a.text, createdAt: a.createdAt })),
+            },
+          }));
+        }
+      } catch {}
+    },
     addAnnotation: (paperId, text) => {
       const trimmed = text.trim();
       if (!trimmed) return;
+      const paper = get().papers.find((p) => p.id === paperId);
       const note: Annotation = {
         id: "an_" + Math.random().toString(36).slice(2, 8),
         text: trimmed,
@@ -662,18 +737,74 @@ export const createApiStore = () => {
       set((s) => ({
         annotations: { ...s.annotations, [paperId]: [note, ...(s.annotations[paperId] ?? [])] },
       }));
+      if (paper?.workspaceId) {
+        papersApi.addAnnotation(paper.workspaceId, paperId, trimmed)
+          .then((created) => {
+            if (created) {
+              set((s) => ({
+                annotations: {
+                  ...s.annotations,
+                  [paperId]: (s.annotations[paperId] ?? []).map((a) =>
+                    a.id === note.id ? { id: created.id, text: created.text, createdAt: created.createdAt } : a,
+                  ),
+                },
+              }));
+            }
+          })
+          .catch(() => {});
+      }
     },
     removeAnnotation: (paperId, id) => {
+      const paper = get().papers.find((p) => p.id === paperId);
       set((s) => ({
         annotations: {
           ...s.annotations,
           [paperId]: (s.annotations[paperId] ?? []).filter((a) => a.id !== id),
         },
       }));
+      if (paper?.workspaceId && !id.startsWith("an_")) {
+        papersApi.deleteAnnotation(paper.workspaceId, paperId, id).catch(() => {});
+      }
     },
 
     // ── Datasets ──────────────────────────────────────────────────
     databases: [],
+    fetchDatasets: async (wsId) => {
+      try {
+        const items = await datasetsApi.list(wsId);
+        if (Array.isArray(items)) {
+          const mapped: ImportDatabase[] = items.map((d) => ({
+            id: d.id,
+            name: d.name,
+            fileName: d.fileKey,
+            previewJson: d.previewJson,
+          }));
+          set((s) => {
+            const ids = new Set(mapped.map((d) => d.id));
+            const others = s.databases.filter((d) => !ids.has(d.id));
+            return { databases: [...mapped, ...others] };
+          });
+        }
+      } catch {}
+    },
+    uploadDataset: async (wsId, file) => {
+      const uploaded = await datasetsApi.upload(wsId, file);
+      if (uploaded) {
+        set((s) => ({
+          databases: [
+            {
+              id: uploaded.id,
+              name: uploaded.name,
+              fileName: uploaded.fileKey,
+              previewJson: uploaded.previewJson,
+            },
+            ...s.databases,
+          ],
+        }));
+      } else {
+        await get().fetchDatasets(wsId);
+      }
+    },
     addDatabase: (name, fileName) => {
       const trimmed = name.trim();
       if (!trimmed) return;
@@ -688,14 +819,66 @@ export const createApiStore = () => {
       }));
     },
     deleteDatabase: (dbId) => {
+      const db = get().databases.find((d) => d.id === dbId);
       set((s) => ({ databases: s.databases.filter((d) => d.id !== dbId) }));
+      // Best-effort backend delete across workspaces that own it
+      const wsIds = new Set(get().workspaces.map((w) => w.id));
+      wsIds.forEach((wsId) => {
+        datasetsApi.delete(wsId, dbId).catch(() => {});
+      });
+      void db;
     },
 
     // ── Evidence ──────────────────────────────────────────────────
     evidence: {},
 
+    fetchEvidence: async (wsId) => {
+      try {
+        const data = await evidenceApi.list(wsId, { limit: 100 });
+        if (data?.items) {
+          const claims: EvidenceClaim[] = data.items.map((c) => ({
+            id: c.id,
+            paperId: c.paperId,
+            question: c.question,
+            stance: c.stance,
+            summary: c.summary,
+            paragraph: c.paragraph,
+            confidence: c.confidence,
+          }));
+          set((s) => ({ evidence: { ...s.evidence, [wsId]: claims } }));
+        }
+      } catch {
+        // leave existing (possibly synthesised) claims untouched
+      }
+    },
+
+    setEvidence: (wsId, claims) =>
+      set((s) => ({ evidence: { ...s.evidence, [wsId]: claims } })),
+
     // ── Notes ─────────────────────────────────────────────────────
     notes: {},
+    fetchNotes: async (wsId) => {
+      try {
+        const data = await notesApi.list(wsId, { limit: 100 });
+        const items = data?.items ?? [];
+        if (Array.isArray(items)) {
+          set((s) => ({
+            notes: {
+              ...s.notes,
+              [wsId]: items.map((n) => ({
+                id: n.id,
+                title: n.title,
+                body: n.body,
+                paperIds: n.paperIds,
+                updatedAt: new Date(n.updatedAt).toLocaleDateString(),
+                group: n.group ?? undefined,
+                tags: n.tags,
+              })),
+            },
+          }));
+        }
+      } catch {}
+    },
     createNote: (wsId) => {
       const id = "n_" + Math.random().toString(36).slice(2, 8);
       const note: Note = { id, title: "Untitled note", body: "", paperIds: [], updatedAt: "just now" };

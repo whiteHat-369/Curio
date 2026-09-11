@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useParams, notFound } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useApiStore } from "@/lib/api-store";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -33,13 +33,28 @@ function PaperDetail() {
   const annotations = useApiStore((s) => s.annotations[paperId]) ?? [];
   const addAnnotation = useApiStore((s) => s.addAnnotation);
   const removeAnnotation = useApiStore((s) => s.removeAnnotation);
+  const fetchPapers = useApiStore((s) => s.fetchPapers);
+  const fetchAnnotations = useApiStore((s) => s.fetchAnnotations);
+  const fetchEvidence = useApiStore((s) => s.fetchEvidence);
   const [note, setNote] = useState("");
   const loading = useSimulatedLoad([paperId]);
+
+  // Ensure full paper info exists even on direct navigation / refresh.
+  useEffect(() => {
+    if (!paper && ws?.id) fetchPapers(ws.id);
+  }, [paper, ws?.id, fetchPapers]);
+  useEffect(() => {
+    if (ws?.id && paperId) {
+      fetchAnnotations(ws.id, paperId);
+      fetchEvidence(ws.id);
+    }
+  }, [ws?.id, paperId, fetchAnnotations, fetchEvidence]);
+
   if (loading) return <PaperDetailSkeleton />;
   if (!ws || !paper) return null;
 
   return (
-    <div className="mx-auto max-w-6xl px-8 py-8">
+    <div className="mx-auto max-w-6xl px-8 py-8 animate-enter">
       <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_320px]">
         <div>
           <div className="font-ui text-xs uppercase tracking-wider text-muted-foreground">

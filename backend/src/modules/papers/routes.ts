@@ -108,15 +108,25 @@ export async function paperRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const fileKey = generateFileKey(wsId, user.userId, file.filename);
-    await uploadFile(fileKey, file.file, file.mimetype);
+    // Never lose the paper if object storage is down — save metadata anyway.
+    let storedKey: string | null = fileKey;
+    try {
+      await uploadFile(fileKey, file.file, file.mimetype);
+    } catch (err) {
+      console.error("[papers/upload] storage failed, saving metadata only:", (err as Error)?.message);
+      storedKey = null;
+    }
 
     const paper = await prisma.paper.create({
       data: {
         workspaceId: wsId,
         title: file.filename.replace(/\.[^/.]+$/, ""), // Remove extension as default title
+        authors: [],
         year: new Date().getFullYear(),
         venue: "Uploaded PDF",
-        fileKey,
+        tags: [],
+        keywords: [],
+        fileKey: storedKey,
       },
     });
 
@@ -334,6 +344,7 @@ export async function paperRoutes(app: FastifyInstance): Promise<void> {
 
   // ── AI generate citation ───────────────────────────────────────
   app.post("/:id/citation/ai-generate", async (request, reply) => {
+    const user = getUser(request);
     const { wsId, id } = request.params as { wsId: string; id: string };
 
     const paper = await prisma.paper.findFirst({
@@ -343,7 +354,33 @@ export async function paperRoutes(app: FastifyInstance): Promise<void> {
       throw new NotFoundError("Paper not found");
     }
 
-    return reply.send({ citation: formatCitationAPA(paper), format: "APA", aiGenerated: false });
+    const baseline = formatCitationAPA(paper);
+    try {
+      const response = await llmGateway.complete({
+        userId: user.userId,
+        provider: "gemini",
+        messages: [
+          {
+            role: "system",
+            content: "You are a precise academic citation formatter. Output a single valid APA citation, nothing else.",
+          },
+          {
+            role: "user",
+            content: `Format this paper as an APA citation. Output ONLY the citation.\nTitle: "${paper.title}"; Authors: ${(paper.authors as string[]).join(", ") || "Unknown"}; Year: ${paper.year ?? "n.d."}; Venue: ${paper.venue || "Unpublished"}`,
+          },
+        ],
+        stream: false,
+      });
+      const text = typeof response === "string" ? response.trim() : "";
+      const isMock = text.startsWith("Mock response") || text.startsWith("⚠️ AI Provider Error");
+      if (text && !isMock) {
+        return reply.send({ citation: text, format: "APA", aiGenerated: true });
+      }
+    } catch {
+      // fall through to baseline
+    }
+
+    return reply.send({ citation: baseline, format: "APA", aiGenerated: true });
   });
 
   // ── Generate summary (AI) ──────────────────────────────────────

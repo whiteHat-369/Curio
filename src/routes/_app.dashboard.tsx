@@ -18,7 +18,7 @@ function Dashboard() {
   const inProgress = papers.filter((p) => p.status === "reading").slice(0, 3);
 
   return (
-    <div className="mx-auto max-w-6xl px-8 py-8">
+    <div className="mx-auto max-w-6xl px-8 py-8 animate-enter">
       <div className="mt-4">
         <h1 className="font-display text-2xl font-semibold">Welcome back, {userName ?? "there"}.</h1>
         <p className="mt-1 text-sm text-muted-foreground">
@@ -49,7 +49,7 @@ function Dashboard() {
         <div className="grid gap-4 md:grid-cols-3">
           {workspaces.slice(0, 3).map((w) => (
             <Link key={w.id} to={`/workspace/${slugify(w.name)}`}>
-              <Card className="group h-full border-border p-5 transition-colors hover:border-[var(--primary)]/40">
+              <Card className="group card-lift h-full border-border p-5 hover:border-[var(--primary)]/40">
                 <div className="flex items-center gap-2 font-ui text-xs text-muted-foreground">
                   <Clock className="h-3 w-3" /> {w.updatedAt}
                 </div>
@@ -60,9 +60,9 @@ function Dashboard() {
                 <div className="mt-5 space-y-1.5">
                   <div className="flex items-center justify-between font-ui text-[11px] text-muted-foreground">
                     <span>{w.paperIds.length} papers</span>
-                    <span>{Math.round(w.progress * 100)}% read</span>
+                    <span>{Math.round(w.progress)}% read</span>
                   </div>
-                  <Progress value={w.progress * 100} className="h-1" />
+                  <Progress value={Math.min(100, Math.max(0, w.progress))} className="h-1" />
                 </div>
               </Card>
             </Link>

@@ -17,6 +17,7 @@ function AppLayout() {
   const [openState, setOpenState] = useState<boolean>(true);
   const fetchMe = useApiStore((s) => s.fetchMe);
   const fetchWorkspaces = useApiStore((s) => s.fetchWorkspaces);
+  const reduceMotion = useApiStore((s) => s.reduceMotion);
   const store = useApiStoreApi();
   useEffect(() => {
     try {
@@ -33,6 +34,11 @@ function AppLayout() {
       }
     });
   }, [fetchMe, fetchWorkspaces, store, navigate]);
+  useEffect(() => {
+    try {
+      document.documentElement.classList.toggle("reduce-motion", reduceMotion);
+    } catch {}
+  }, [reduceMotion]);
   const handleOpenChange = (o: boolean) => {
     setOpenState(o);
     try {

@@ -45,6 +45,7 @@ function CitationsPage() {
   const defaultCiteFormat = useApiStore((s) => s.defaultCiteFormat);
   const [fmt, setFmt] = useState<Fmt>(defaultCiteFormat);
   const [generated, setGenerated] = useState<Set<string>>(new Set());
+  const [aiCitations, setAiCitations] = useState<Record<string, string>>({});
   const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [exporting, setExporting] = useState(false);
@@ -90,9 +91,22 @@ function CitationsPage() {
     if (targets.length === 0) return;
     setLoadingIds((prev) => new Set([...prev, ...targets]));
     try {
-      await citationsApi.aiGenerate(ws.id, targets);
-      setGenerated((prev) => new Set([...prev, ...targets]));
-    } catch {
+      const res = await citationsApi.aiGenerate(ws.id, targets, fmt);
+      if (res?.citations?.length) {
+        setAiCitations((prev) => {
+          const next = { ...prev };
+          for (const c of res.citations) next[c.paperId] = c.citation;
+          return next;
+        });
+        setGenerated((prev) => new Set([...prev, ...targets]));
+        toast.success(
+          res.aiGenerated ? "Citations generated with AI" : "Citations generated",
+        );
+      } else {
+        throw new Error("Empty response");
+      }
+    } catch (err) {
+      toast.error("AI generation failed — showing local formatting instead");
       setGenerated((prev) => new Set([...prev, ...targets]));
     } finally {
       setLoadingIds((prev) => {
@@ -110,7 +124,7 @@ function CitationsPage() {
   };
 
   return (
-    <div className="mx-auto max-w-5xl px-8 py-8">
+    <div className="mx-auto max-w-5xl px-8 py-8 animate-enter">
       <div className="mt-4 flex items-end justify-between">
         <div>
           <div className="flex items-center gap-2">
@@ -129,7 +143,13 @@ function CitationsPage() {
             {(["APA", "IEEE", "BibTeX"] as const).map((f) => (
               <button
                 key={f}
-                onClick={() => setFmt(f)}
+                onClick={() => {
+                  setFmt(f);
+                  // Format changed — clear cached AI strings so the next
+                  // Generate call fetches fresh citations in the new style.
+                  setAiCitations({});
+                  setGenerated(new Set());
+                }}
                 className={`rounded px-3 py-1 font-ui text-xs ${
                   fmt === f ? "bg-muted text-foreground" : "text-muted-foreground"
                 }`}
@@ -186,7 +206,7 @@ function CitationsPage() {
       ) : (
         <div className="mt-8 space-y-3">
           {papers.map((p) => {
-            const cite = formatCitation(p, fmt);
+            const cite = aiCitations[p.id] ?? formatCitation(p, fmt);
             const isGenerated = generated.has(p.id);
             const isLoading = loadingIds.has(p.id);
             const isSelected = selected.has(p.id);

@@ -15,6 +15,8 @@ import {
   resendVerificationSchema,
   onboardingSchema,
   updateProfileSchema,
+  changePasswordSchema,
+  deleteAccountSchema,
 } from "../../lib/validation.js";
 import { BadRequestError, UnauthorizedError, NotFoundError, ConflictError } from "../../lib/errors.js";
 
@@ -366,5 +368,87 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       field: user.field,
       affiliation: user.affiliation,
     });
+  });
+
+  // ── Change password ─────────────────────────────────────────────
+  app.post("/me/password", { preHandler: [authHook] }, async (request, reply) => {
+    const authUser = getUser(request);
+    const { currentPassword, newPassword } = validate(changePasswordSchema, request.body);
+
+    const user = await prisma.user.findUnique({ where: { id: authUser.userId } });
+    if (!user) throw new NotFoundError("User not found");
+
+    if (!(await verifyPassword(currentPassword, user.passwordHash))) {
+      throw new UnauthorizedError("Current password is incorrect");
+    }
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash: await hashPassword(newPassword) },
+    });
+
+    // Invalidate all other sessions; keep the caller logged in with a fresh token
+    await prisma.refreshToken.deleteMany({ where: { userId: user.id } });
+    const refreshToken = await generateRefreshToken(user.id);
+    const accessToken = generateAccessToken(user);
+
+    return reply.send({ message: "Password updated", accessToken, refreshToken });
+  });
+
+  // ── Delete account (password-confirmed, cascades all user data) ──
+  app.delete("/me", { preHandler: [authHook] }, async (request, reply) => {
+    const authUser = getUser(request);
+    const { password } = validate(deleteAccountSchema, request.body);
+
+    const user = await prisma.user.findUnique({ where: { id: authUser.userId } });
+    if (!user) throw new NotFoundError("User not found");
+
+    if (!(await verifyPassword(password, user.passwordHash))) {
+      throw new UnauthorizedError("Password is incorrect");
+    }
+
+    const workspaces = await prisma.workspace.findMany({
+      where: { ownerId: user.id },
+      select: { id: true },
+    });
+    const wsIds = workspaces.map((w) => w.id);
+
+    const conversations = wsIds.length > 0
+      ? await prisma.conversation.findMany({
+          where: { workspaceId: { in: wsIds } },
+          select: { id: true },
+        })
+      : [];
+    const convIds = conversations.map((c) => c.id);
+
+    await prisma.$transaction([
+      // Chat (messages cascade from conversations, but delete explicitly for safety)
+      ...(convIds.length > 0
+        ? [
+            prisma.chatMessage.deleteMany({ where: { conversationId: { in: convIds } } }),
+            prisma.conversation.deleteMany({ where: { id: { in: convIds } } }),
+          ]
+        : []),
+      // Papers (summaries + annotations cascade from papers)
+      ...(wsIds.length > 0
+        ? [
+            prisma.annotation.deleteMany({ where: { paper: { workspaceId: { in: wsIds } } } }),
+            prisma.paperSummary.deleteMany({ where: { paper: { workspaceId: { in: wsIds } } } }),
+            prisma.paper.deleteMany({ where: { workspaceId: { in: wsIds } } }),
+            prisma.dataset.deleteMany({ where: { workspaceId: { in: wsIds } } }),
+            prisma.evidenceClaim.deleteMany({ where: { workspaceId: { in: wsIds } } }),
+            prisma.note.deleteMany({ where: { workspaceId: { in: wsIds } } }),
+            prisma.workspace.deleteMany({ where: { id: { in: wsIds } } }),
+          ]
+        : []),
+      // Account-scoped records
+      prisma.apiKey.deleteMany({ where: { userId: user.id } }),
+      prisma.refreshToken.deleteMany({ where: { userId: user.id } }),
+      prisma.passwordResetToken.deleteMany({ where: { userId: user.id } }),
+      prisma.emailVerificationToken.deleteMany({ where: { userId: user.id } }),
+      prisma.user.delete({ where: { id: user.id } }),
+    ]);
+
+    return reply.status(204).send();
   });
 }

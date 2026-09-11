@@ -1,5 +1,5 @@
 import { createFileRoute, useParams } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useApiStore, type ImportDatabase } from "@/lib/api-store";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -24,23 +24,36 @@ function DatasetsPage() {
   const { name } = useParams({ from: "/_app/workspace/$name/datasets" });
   const ws = useApiStore((s) => s.workspaces.find((w) => slugify(w.name) === name));
   const databases = useApiStore((s) => s.databases);
-  const addDatabase = useApiStore((s) => s.addDatabase);
+  const fetchDatasets = useApiStore((s) => s.fetchDatasets);
+  const uploadDataset = useApiStore((s) => s.uploadDataset);
   const renameDatabase = useApiStore((s) => s.renameDatabase);
   const deleteDatabase = useApiStore((s) => s.deleteDatabase);
 
   const [previewDb, setPreviewDb] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+
+  useEffect(() => {
+    if (ws?.id) fetchDatasets(ws.id);
+  }, [ws?.id, fetchDatasets]);
 
   if (!ws) return null;
 
-  const handleFileUpload = (files: FileList | null) => {
+  const handleFileUpload = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     const file = files[0];
-    addDatabase(file.name, file.name);
-    toast.success(`${file.name} uploaded`);
+    setUploading(true);
+    try {
+      await uploadDataset(ws.id, file);
+      toast.success(`${file.name} uploaded`);
+    } catch {
+      toast.error("Dataset upload failed");
+    } finally {
+      setUploading(false);
+    }
   };
 
   return (
-    <div className="mx-auto max-w-4xl px-8 py-8">
+    <div className="mx-auto max-w-4xl px-8 py-8 animate-enter">
       <div className="mt-4 flex items-end justify-between">
         <div>
           <div className="flex items-center gap-2">
@@ -59,9 +72,9 @@ function DatasetsPage() {
               e.currentTarget.value = "";
             }}
           />
-          <Button className="font-ui" asChild>
+          <Button className="font-ui" disabled={uploading} asChild>
             <span className="cursor-pointer">
-              <Upload className="mr-1.5 h-4 w-4" /> Upload dataset
+              <Upload className="mr-1.5 h-4 w-4" /> {uploading ? "Uploading…" : "Upload dataset"}
             </span>
           </Button>
         </label>

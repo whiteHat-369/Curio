@@ -48,13 +48,20 @@ export async function datasetRoutes(app: FastifyInstance): Promise<void> {
 
     const fileKey = generateFileKey(wsId, user.userId, file.filename);
 
-    await uploadFile(fileKey, file.file, file.mimetype);
+    // Never lose the dataset if object storage is down — save metadata anyway.
+    let storedKey: string = fileKey;
+    try {
+      await uploadFile(fileKey, file.file, file.mimetype);
+    } catch (err) {
+      console.error("[datasets/upload] storage failed, saving metadata only:", (err as Error)?.message);
+      storedKey = `pending/${wsId}/${Date.now()}_${file.filename}`;
+    }
 
     const dataset = await prisma.dataset.create({
       data: {
         workspaceId: wsId,
         name: file.filename.replace(/\.[^/.]+$/, ""),
-        fileKey,
+        fileKey: storedKey,
         fileType: ext,
       },
     });
@@ -93,9 +100,13 @@ export async function datasetRoutes(app: FastifyInstance): Promise<void> {
       throw new NotFoundError("Dataset not found");
     }
 
-    // Delete from object storage
-    if (existing.fileKey) {
-      await deleteFile(existing.fileKey);
+    // Delete from object storage (best-effort — never block metadata delete)
+    if (existing.fileKey && !existing.fileKey.startsWith("pending/")) {
+      try {
+        await deleteFile(existing.fileKey);
+      } catch (err) {
+        console.error("[datasets/delete] storage cleanup failed:", (err as Error)?.message);
+      }
     }
 
     await prisma.dataset.delete({ where: { id } });

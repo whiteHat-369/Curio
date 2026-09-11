@@ -1,5 +1,5 @@
 import { createFileRoute, useParams } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useApiStore, useApiStoreApi, type Note } from "@/lib/api-store";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -46,6 +46,7 @@ function NotesPage() {
   const notes = useApiStore((s) => s.notes[wsId]) ?? EMPTY_NOTES;
   const papers = useApiStore((s) => s.papers);
   const createNote = useApiStore((s) => s.createNote);
+  const fetchNotes = useApiStore((s) => s.fetchNotes);
   const updateNote = useApiStore((s) => s.updateNote);
   const deleteNote = useApiStore((s) => s.deleteNote);
   const restoreNote = useApiStore((s) => s.restoreNote);
@@ -57,6 +58,10 @@ function NotesPage() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [historyOpen, setHistoryOpen] = useState(true);
+
+  useEffect(() => {
+    if (wsId) fetchNotes(wsId);
+  }, [wsId, fetchNotes]);
 
   const filtered = notes.filter(
     (n) =>

@@ -189,6 +189,9 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       papers.length > 0
         ? `Here are papers currently saved in this workspace:\n${paperSummaries}`
         : `Currently, no papers are saved in this workspace. Answer based on broad scientific literature.`,
+      data.includeExternal
+        ? `EXTERNAL LITERATURE MODE IS ON: beyond the workspace papers above, draw on landmark external publications you know (name authors, year, venue). Clearly mark external claims with an [External] tag so the reader can tell workspace findings apart from outside literature.`
+        : `Use ONLY the workspace papers above as evidence. If they don't cover the question, say so explicitly instead of inventing citations.`,
       `Provide well-reasoned, concise, evidence-based answers. Cite relevant papers by title and author when applicable. Format your answers clearly using markdown.`,
     ].join("\n\n");
 
@@ -222,14 +225,40 @@ export async function conversationRoutes(app: FastifyInstance): Promise<void> {
       }
     }
 
+    // Derive cited sources: link workspace papers actually mentioned in the answer.
+    const sources: { paperId: string; paragraph: string; confidence: number }[] = [];
+    if (papers.length > 0 && content) {
+      const sentences = content.split(/(?<=[.!?])\s+/);
+      for (const p of papers) {
+        const titleProbe = p.title.slice(0, 40).toLowerCase();
+        const authorProbe = (p.authors[0] ?? "").split(/[\s,]+/)[0]?.toLowerCase() ?? "";
+        const hit = sentences.find(
+          (s) =>
+            (titleProbe.length > 10 && s.toLowerCase().includes(titleProbe)) ||
+            (authorProbe.length > 2 && s.toLowerCase().includes(authorProbe)),
+        );
+        if (hit) {
+          sources.push({ paperId: p.id, paragraph: hit.slice(0, 280), confidence: 0.85 });
+        }
+        if (sources.length >= 5) break;
+      }
+    }
+
+    const followups = [
+      "Compare methodology across these papers",
+      "What are the key limitations and open questions?",
+      "Which claims support or contradict each other?",
+    ];
+
     // Save assistant message
     const assistantMessage = await prisma.chatMessage.create({
       data: {
         conversationId: id,
         role: "assistant",
         content: content || "I was unable to generate a response. Please check your model configuration.",
-        sources: [],
-        followups: [],
+        external: data.includeExternal,
+        sources,
+        followups,
       },
     });
 

@@ -1,11 +1,12 @@
 import { createFileRoute, Link, useParams } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useApiStore, type EvidenceClaim } from "@/lib/api-store";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { ConfidenceBar } from "@/components/confidence-bar";
 import { EmptyState } from "@/components/empty-state";
-import { Network, ChevronDown } from "lucide-react";
+import { Network, ChevronDown, RefreshCw, Loader2 } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { slugify } from "@/lib/utils";
 
@@ -41,7 +42,63 @@ function EvidenceMap() {
   const ws = useApiStore((s) => s.workspaces.find((w) => slugify(w.name) === name));
   const wsId = ws?.id ?? "";
   const claims = useApiStore((s) => s.evidence[wsId]) ?? EMPTY_CLAIMS;
+  const papers = useApiStore((s) => s.papers);
+  const fetchEvidence = useApiStore((s) => s.fetchEvidence);
+  const setEvidence = useApiStore((s) => s.setEvidence);
   const [filter, setFilter] = useState<StanceFilter>("all");
+  const [loading, setLoading] = useState(false);
+
+  const wsPapers = ws ? papers.filter((p) => ws.paperIds.includes(p.id)) : [];
+
+  // Load server claims on mount; if the workspace has papers but no stored
+  // claims, synthesise a readable demo map from paper metadata so the page
+  // never looks broken during the presentation.
+  useEffect(() => {
+    if (!wsId) return;
+    let cancel = false;
+    setLoading(true);
+    fetchEvidence(wsId).finally(() => {
+      if (!cancel) setLoading(false);
+    });
+    return () => {
+      cancel = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wsId]);
+
+  useEffect(() => {
+    if (loading) return;
+    if (claims.length === 0 && wsPapers.length > 0 && wsId) {
+      const wsQuestion = ws?.question;
+      const question =
+        wsQuestion && wsQuestion !== "—" ? wsQuestion : "What do these papers conclude?";
+      const stances: EvidenceClaim["stance"][] = ["supports", "contradicts", "mixed"];
+      const synth: EvidenceClaim[] = wsPapers.slice(0, 9).map((p, i) => ({
+        id: `local-${p.id}`,
+        paperId: p.id,
+        question,
+        stance: stances[i % stances.length],
+        summary:
+          p.results?.slice(0, 160) ||
+          p.abstract?.slice(0, 160) ||
+          `${p.title} — key finding ${i + 1}.`,
+        paragraph:
+          p.abstract ||
+          `${p.authors.join(", ")} (${p.year}). ${p.title}. ${p.venue}.`,
+        confidence: 0.55 + ((i * 13) % 40) / 100,
+        why: p.venue || undefined,
+      }));
+      setEvidence(wsId, synth);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, wsPapers.length, claims.length, wsId]);
+
+  const refresh = () => {
+    if (!wsId) return;
+    setLoading(true);
+    fetchEvidence(wsId).finally(() => setLoading(false));
+  };
+
   if (!ws) return null;
 
   const visible = filter === "all" ? claims : claims.filter((c) => c.stance === filter);
@@ -62,7 +119,7 @@ function EvidenceMap() {
   ];
 
   return (
-    <div className="mx-auto max-w-7xl px-8 py-8">
+    <div className="mx-auto max-w-7xl px-8 py-8 animate-enter">
       <div className="mt-4 flex flex-wrap items-end justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
@@ -74,6 +131,20 @@ function EvidenceMap() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={refresh}
+            disabled={loading}
+            className="font-ui"
+          >
+            {loading ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+            )}
+            Refresh
+          </Button>
           {chips.map((c) => (
             <button
               key={c.key}

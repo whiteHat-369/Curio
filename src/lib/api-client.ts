@@ -193,8 +193,9 @@ async function uploadFile<T>(
   formData.append("file", file);
 
   const headers: Record<string, string> = {};
-  if (authToken) {
-    headers["Authorization"] = `Bearer ${authToken}`;
+  const token = getAuthToken();
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
   }
 
   const response = await fetch(`${API_BASE}${path}`, {
@@ -605,9 +606,9 @@ export const citationsApi = {
     );
   },
 
-  aiGenerate: (wsId: string, ids: string[]) =>
+  aiGenerate: (wsId: string, ids: string[], format?: string) =>
     request<{ citations: Array<{ paperId: string; citation: string; format: string }>; aiGenerated: boolean }>(
-      "POST", `/workspaces/${wsId}/citations/ai-generate`, { ids },
+      "POST", `/workspaces/${wsId}/citations/ai-generate`, { ids, format: format ?? "APA" },
     ),
 };
 
@@ -692,6 +693,21 @@ export const authApi = {
 
   updateProfile: (data: Partial<{ name: string; mobile: string; field: string; affiliation: string }>) =>
     request<UserDTO>("PATCH", "/auth/me", data),
+
+  changePassword: async (currentPassword: string, newPassword: string) => {
+    const data = await request<{ message: string; accessToken: string; refreshToken: string }>(
+      "POST",
+      "/auth/me/password",
+      { currentPassword, newPassword },
+    );
+    // Sessions were rotated server-side — adopt the fresh tokens.
+    setAuthToken(data.accessToken);
+    setRefreshToken(data.refreshToken);
+    return data;
+  },
+
+  deleteAccount: (password: string) =>
+    request<void>("DELETE", "/auth/me", { password }),
 };
 
 // ── Error helper ─────────────────────────────────────────────────

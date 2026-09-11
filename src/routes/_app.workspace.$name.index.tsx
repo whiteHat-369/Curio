@@ -1,7 +1,7 @@
 import { createFileRoute, Link, useParams } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useApiStore } from "@/lib/api-store";
-import { getAuthToken } from "@/lib/api-client";
+import { overviewApi } from "@/lib/api-client";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -32,39 +32,68 @@ function Overview() {
   const [health, setHealth] = useState<HealthData | null>(null);
   const [healthLoading, setHealthLoading] = useState(true);
 
+  const wsPapers = ws ? papers.filter((p) => ws.paperIds.includes(p.id)) : [];
+
   useEffect(() => {
     if (!ws?.id) return;
     let cancel = false;
     setHealthLoading(true);
-    const token = getAuthToken();
-    const API_BASE = (import.meta.env.VITE_API_BASE as string) || "http://localhost:3001/api/v1";
-    fetch(`${API_BASE}/workspaces/${ws.id}/overview/health`, {
-      headers: {
-        Accept: "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-    })
-      .then((res) => res.json())
+    const computeLocal = (): HealthData => {
+      const currentYear = new Date().getFullYear();
+      const paperCount = wsPapers.length;
+      const readCount = wsPapers.filter((p) => p.status === "read").length;
+      const recent = wsPapers.filter((p) => (p.year ?? 0) >= currentYear - 3).length;
+      const coveragePercent = paperCount > 0 ? Math.round((readCount / paperCount) * 100) : 0;
+      const recencyPercent = paperCount > 0 ? Math.round((recent / paperCount) * 100) : 0;
+      const suggestions: string[] =
+        paperCount === 0
+          ? ["No papers added yet. Start by uploading papers to build your workspace library."]
+          : [
+              coveragePercent < 50
+                ? `Only ${coveragePercent}% of papers have been read. Consider reviewing unread papers to improve coverage.`
+                : `Great coverage! ${coveragePercent}% of papers in this workspace have been read.`,
+              recencyPercent < 40
+                ? `Only ${recencyPercent}% of papers are from the last 3 years. Consider adding recent publications.`
+                : `Strong temporal recency: ${recencyPercent}% of papers were published within the last 3 years.`,
+            ];
+      return {
+        paperCount,
+        readCount,
+        coveragePercent,
+        recencyPercent,
+        evidenceCount: 0,
+        notesCount: 0,
+        datasetCount: 0,
+        suggestions,
+      };
+    };
+    overviewApi
+      .getHealth(ws.id)
       .then((data) => {
         if (!cancel && data && typeof data.coveragePercent === "number") {
           setHealth(data);
+        } else if (!cancel) {
+          setHealth(computeLocal());
         }
       })
-      .catch(() => {})
+      .catch(() => {
+        // Backend unreachable — compute health locally so the panel still shows.
+        if (!cancel) setHealth(computeLocal());
+      })
       .finally(() => {
         if (!cancel) setHealthLoading(false);
       });
     return () => {
       cancel = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ws?.id]);
 
   if (!ws) return null;
-  const wsPapers = papers.filter((p) => ws.paperIds.includes(p.id));
   const readCount = wsPapers.filter((p) => p.status === "read").length;
 
   return (
-    <div className="mx-auto max-w-6xl px-8 py-8">
+    <div className="mx-auto max-w-6xl px-8 py-8 animate-enter">
       <div className="mt-6 rounded-xl border border-border bg-card p-8">
         <p className="font-ui text-xs uppercase tracking-wider text-[var(--primary)]">
           Research question
@@ -94,9 +123,9 @@ function Overview() {
             <div className="mb-1 font-ui text-xs uppercase tracking-wider text-muted-foreground">
               Progress
             </div>
-            <Progress value={ws.progress * 100} className="h-1.5" />
+            <Progress value={Math.min(100, Math.max(0, ws.progress))} className="h-1.5" />
             <div className="mt-1 font-ui text-xs text-muted-foreground">
-              {Math.round(ws.progress * 100)}%
+              {Math.round(ws.progress)}%
             </div>
           </div>
         </div>
